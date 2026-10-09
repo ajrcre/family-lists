@@ -248,3 +248,32 @@ test("API without a token returns 401", async ({ playwright }) => {
   }
   await anon.dispose();
 });
+
+test("agent signs in with the API token and can read the API in the browser", async ({ page }) => {
+  // Without a session the API refuses a browser GET.
+  expect((await page.request.get("/api/lists")).status()).toBe(401);
+
+  await page.goto("/agent-login");
+  await page.getByLabel("API token").fill("not-the-token");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByText("Invalid token")).toBeVisible();
+  await expect(page).toHaveURL(/\/agent-login$/);
+
+  await page.getByLabel("API token").fill(process.env.E2E_API_TOKEN!);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.waitForURL((u) => u.pathname !== "/agent-login");
+  await expect(page.getByLabel("בחירת רשימה").or(page.getByRole("heading", { name: "אין עדיין רשימות" }))).toBeVisible();
+
+  const res = await page.goto("/api/lists");
+  expect(res!.status()).toBe(200);
+  const body = await res!.json();
+  expect(Array.isArray(body.lists)).toBe(true);
+  if (body.lists.length > 0) {
+    const items = await page.goto(`/api/lists/${body.lists[0].id}/items`);
+    expect(items!.status()).toBe(200);
+    expect(Array.isArray((await items!.json()).items)).toBe(true);
+  }
+
+  // The session is read-only for the API: writes still need the bearer token.
+  expect((await page.request.post("/api/lists", { data: { name: "x" } })).status()).toBe(401);
+});

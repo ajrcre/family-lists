@@ -3,7 +3,7 @@
 import { createHash } from "node:crypto";
 import { query } from "../db";
 
-export type AttemptKind = "pin" | "link";
+export type AttemptKind = "pin" | "link" | "agent";
 
 interface Rule {
   perClient: number;
@@ -13,9 +13,13 @@ interface Rule {
   globalWindowMinutes?: number;
 }
 
+const PIN_RULE: Rule = { perClient: 5, windowMinutes: 15, global: 30, globalWindowMinutes: 60 };
+
 export const RULES: Record<AttemptKind, Rule> = {
-  pin: { perClient: 5, windowMinutes: 15, global: 30, globalWindowMinutes: 60 },
+  pin: PIN_RULE,
   link: { perClient: 10, windowMinutes: 15 },
+  // Agent sign-in (API token on /agent-login) gets the same guess protection as the PIN.
+  agent: PIN_RULE,
 };
 
 export function clientKey(headers: Headers): string {

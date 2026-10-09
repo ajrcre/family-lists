@@ -10,7 +10,7 @@ export const GET = apiRoute(async (_req, ctx: Ctx) => {
   const { listId } = await ctx.params;
   if (!(await getList(listId))) return notFound();
   return json({ items: await listOpenItems(listId) });
-});
+}, { agentSession: true });
 
 export const POST = apiRoute(async (req, ctx: Ctx) => {
   const { listId } = await ctx.params;

@@ -1,14 +1,15 @@
-// Web-UI sessions: a stateless, HMAC-signed cookie. Completely separate from the
-// API bearer token — a session never grants API access.
+// Web-UI sessions: a stateless, HMAC-signed cookie. A session never grants write
+// access to the API; only "agent" sessions (signed in with the API token on
+// /agent-login) may also read the API's GET endpoints, see lib/api.ts.
 //
 // Each session records the login method and a fingerprint of the credential it was
-// created with. Rotating that credential (PIN_HASH or ACCESS_LINK_SECRET) therefore
-// invalidates existing sessions of that method. To add passkeys/WebAuthn later, add
+// created with. Rotating that credential (PIN_HASH, ACCESS_LINK_SECRET or API_TOKEN)
+// therefore invalidates existing sessions of that method. To add passkeys/WebAuthn later, add
 // a "passkey" method here with its own fingerprint source and a login route that
 // calls createSessionCookie("passkey") — nothing else needs to change.
 import { b64url, fingerprint, fromB64url, hmac, safeEqual, strongSecret } from "./crypto";
 
-export type LoginMethod = "pin" | "link";
+export type LoginMethod = "pin" | "link" | "agent";
 
 export const SESSION_COOKIE = "fl_session";
 export const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
@@ -23,6 +24,7 @@ interface SessionPayload {
 const CREDENTIAL_SOURCES: Record<LoginMethod, string> = {
   pin: "PIN_HASH",
   link: "ACCESS_LINK_SECRET",
+  agent: "API_TOKEN",
 };
 
 function credentialFingerprint(method: LoginMethod): string | null {

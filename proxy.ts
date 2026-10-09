@@ -2,7 +2,7 @@
 // bearer token and is excluded here).
 //  - ?key=<access-link token> on any page: rewritten to /auth/link, which swaps it
 //    for a session cookie and redirects to the same URL without the token.
-//  - No valid session: redirect to the PIN screen.
+//  - No valid session: redirect to the PIN screen (the sign-in pages stay reachable).
 import { NextResponse, type NextRequest } from "next/server";
 import { LINK_PARAM } from "@/lib/auth/link";
 import { SESSION_COOKIE, verifySessionValue } from "@/lib/auth/session";
@@ -22,7 +22,7 @@ export function proxy(req: NextRequest) {
   if (pathname.startsWith("/auth/")) return NextResponse.next();
 
   const authed = verifySessionValue(req.cookies.get(SESSION_COOKIE)?.value) !== null;
-  if (pathname === "/login") {
+  if (pathname === "/login" || pathname === "/agent-login") {
     return authed ? NextResponse.redirect(new URL("/", req.url)) : NextResponse.next();
   }
   if (!authed) return NextResponse.redirect(new URL("/login", req.url));

@@ -4,6 +4,7 @@ A small, self-hosted web app for a household to share named lists, such as groce
 
 - **Web UI**: Hebrew, right-to-left, mobile-first. You sign in with one shared 4-digit PIN or a one-tap access link.
 - **JSON API**: bearer-token protected. The assistant uses it to read, create and delete lists and to add, update, mark bought, restore and delete items.
+- **Agent sign-in**: an AI agent can sign in to the web UI at `/agent-login` with the API token, then open the API's GET URLs directly in that browser.
 - **One source of truth**: the UI and the API go through the same data layer, so changes from either side show up in both. The UI refreshes when the app regains focus and every 30 seconds.
 
 Built with Next.js (App Router) and Postgres. It's designed for Vercel with a free Neon Postgres database.
@@ -18,6 +19,7 @@ Built with Next.js (App Router) and Postgres. It's designed for Vercel with a fr
 - [Generating the secrets](#generating-the-secrets)
 - [Deploying to Vercel](#deploying-to-vercel)
 - [Access links](#access-links)
+- [Agent sign-in](#agent-sign-in)
 - [API contract](#api-contract)
 - [Security notes](#security-notes)
 - [Adding passkeys later](#adding-passkeys-later)
@@ -129,9 +131,26 @@ Send the `url` through any private channel. Anyone holding the link can open the
 
 Set `ACCESS_LINK_SECRET` to a new value (`npm run gen-secret`) in Vercel and redeploy. Every previously generated link stops working immediately, and so does every session that was opened from a link. Generate a new link afterwards.
 
+## Agent sign-in
+
+`/agent-login` lets an AI agent that drives a browser sign in with the **API token** instead of the family PIN:
+
+```
+https://your-app.vercel.app/agent-login
+```
+
+- The page has one password field. The token is checked on the server against `API_TOKEN` (constant-time); it is never sent back to the browser.
+- On success the browser gets the same kind of session cookie as a PIN sign-in (same cookie, format and 30-day lifetime) and is redirected to the lists UI. A wrong token shows only "Invalid token".
+- In that browser, the API's **read** endpoints also work without a bearer header, so the agent can open them and read the JSON:
+  - `GET /api/lists`
+  - `GET /api/lists/{listId}/items`
+- Every **write** endpoint (and `POST /api/access-link`) still requires `Authorization: Bearer <API_TOKEN>`; the cookie alone gets `401`. Sessions from the PIN or an access link still get `401` from the whole API.
+- Failed attempts are rate-limited exactly like the PIN: 5 per client per 15 minutes, plus 30 in total per hour.
+- **Revoking**: the session is bound to the token it was created with. Set `API_TOKEN` to a new value (`npm run gen-secret`) and redeploy; every agent session signs out immediately (and the old token stops working against the API). Give the agent the new token.
+
 ## API contract
 
-All requests and responses are JSON (except `204`, which has an empty body). Every request needs `Authorization: Bearer <API_TOKEN>`. Responses are never cached (`Cache-Control: no-store`).
+All requests and responses are JSON (except `204`, which has an empty body). Every request needs `Authorization: Bearer <API_TOKEN>` (the two GET endpoints also accept a browser signed in on [`/agent-login`](#agent-sign-in)). Responses are never cached (`Cache-Control: no-store`).
 
 ### Objects
 
@@ -203,13 +222,14 @@ curl -s -X PATCH -H "$AUTH" -H "Content-Type: application/json" \
 ## Security notes
 
 - **PIN**: stored only as a scrypt hash. Failed attempts are rate-limited: 5 per client per 15 minutes, plus 30 in total per hour across all clients (the PIN space is only 10,000). Failures are tracked in the database, so the limit holds across serverless instances. Client IPs are stored only as salted hashes.
-- **Sessions**: an HMAC-signed, `HttpOnly`, `SameSite=Lax` cookie (`Secure` in production) that lasts 30 days. A session records how it was created. Changing `PIN_HASH` signs out PIN sessions, changing `ACCESS_LINK_SECRET` signs out link sessions, and changing `SESSION_SECRET` signs out everyone.
-- **API token**: compared in constant time, only accepted as a bearer header, and never sent to the browser. Web sessions and access links are rejected by the API.
+- **Agent sign-in**: the API token entered on `/agent-login` is rate-limited the same way as the PIN.
+- **Sessions**: an HMAC-signed, `HttpOnly`, `SameSite=Lax` cookie (`Secure` in production) that lasts 30 days. A session records how it was created. Changing `PIN_HASH` signs out PIN sessions, changing `ACCESS_LINK_SECRET` signs out link sessions, changing `API_TOKEN` signs out agent sessions, and changing `SESSION_SECRET` signs out everyone.
+- **API token**: compared in constant time and never sent to the browser. The API accepts it as a bearer header. The only other way in is an agent session (made with the token on `/agent-login`), and it can only use the two GET endpoints. PIN and link sessions, and access links, are rejected by the API.
 - Responses carry `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff` and `X-Frame-Options: DENY`.
 
 ## Adding passkeys later
 
-Authentication is split by login method (`lib/auth/`). The session format (`lib/auth/session.ts`) already records the method used (`"pin"` or `"link"`). To add passkeys/WebAuthn:
+Authentication is split by login method (`lib/auth/`). The session format (`lib/auth/session.ts`) already records the method used (`"pin"`, `"link"` or `"agent"`). To add passkeys/WebAuthn:
 
 1. Add a `"passkey"` method in `lib/auth/session.ts`, with the credential it should be bound to.
 2. Add a `credentials` table to `lib/schema.ts` and registration/login routes, for example with `@simplewebauthn/server`.
@@ -235,6 +255,7 @@ app/
   api/                    JSON API route handlers (bearer token)
   auth/link/route.ts      access-link → session exchange
   login/                  PIN screen and login/logout actions
+  agent-login/            API-token sign-in for an AI agent
   lists/[listId]/         main list screen (server component + client UI)
   actions.ts              Server Actions used by the UI
 lib/

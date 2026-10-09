@@ -9,12 +9,16 @@ import { proxy } from "@/proxy";
 import * as linkRoute from "@/app/auth/link/route";
 import * as accessLinkRoute from "@/app/api/access-link/route";
 import * as listsRoute from "@/app/api/lists/route";
+import * as itemsRoute from "@/app/api/lists/[listId]/items/route";
+import * as itemRoute from "@/app/api/items/[id]/route";
+import { createList } from "@/lib/repo";
 
 const ORIGINAL = { ...process.env };
 afterEach(() => {
   process.env.ACCESS_LINK_SECRET = ORIGINAL.ACCESS_LINK_SECRET;
   process.env.PIN_HASH = ORIGINAL.PIN_HASH;
   process.env.SESSION_SECRET = ORIGINAL.SESSION_SECRET;
+  process.env.API_TOKEN = ORIGINAL.API_TOKEN;
 });
 
 let ipCounter = 0;
@@ -177,12 +181,80 @@ describe("link exchange flow", () => {
   });
 });
 
+describe("agent sessions", () => {
+  const withCookie = (url: string, session: string, init: RequestInit = {}) =>
+    new Request(url, { ...init, headers: { cookie: `other=1; ${SESSION_COOKIE}=${session}` } });
+
+  it("proxy lets visitors without a session reach /agent-login, and sends signed-in ones home", () => {
+    expect(proxy(linkRequest("/agent-login")).headers.get("location")).toBeNull();
+    const signedIn = new NextRequest("http://localhost/agent-login", {
+      headers: { cookie: `${SESSION_COOKIE}=${createSessionValue("agent")}` },
+    });
+    expect(new URL(proxy(signedIn).headers.get("location")!).pathname).toBe("/");
+  });
+
+  it("an agent session can read the GET endpoints in a browser", async () => {
+    const session = createSessionValue("agent");
+    const list = await createList("agent-read");
+    const lists = await listsRoute.GET(withCookie("http://localhost/api/lists", session), {} as never);
+    expect(lists.status).toBe(200);
+    expect(lists.headers.get("cache-control")).toContain("no-store");
+    expect((await lists.json()).lists.some((l: { id: string }) => l.id === list.id)).toBe(true);
+    const items = await itemsRoute.GET(withCookie(`http://localhost/api/lists/${list.id}/items`, session), {
+      params: Promise.resolve({ listId: list.id }),
+    });
+    expect(items.status).toBe(200);
+    expect(await items.json()).toEqual({ items: [] });
+  });
+
+  it("an agent session cannot write through the API", async () => {
+    const session = createSessionValue("agent");
+    const list = await createList("agent-write");
+    const id = "00000000-0000-4000-8000-000000000000";
+    const post = (url: string) => withCookie(url, session, { method: "POST", body: JSON.stringify({ name: "x" }) });
+    const responses = [
+      await listsRoute.POST(post("http://localhost/api/lists"), {} as never),
+      await itemsRoute.POST(post(`http://localhost/api/lists/${list.id}/items`), {
+        params: Promise.resolve({ listId: list.id }),
+      }),
+      await itemRoute.PATCH(withCookie(`http://localhost/api/items/${id}`, session, { method: "PATCH", body: "{}" }), {
+        params: Promise.resolve({ id }),
+      }),
+      await itemRoute.DELETE(withCookie(`http://localhost/api/items/${id}`, session, { method: "DELETE" }), {
+        params: Promise.resolve({ id }),
+      }),
+      await accessLinkRoute.POST(withCookie("http://localhost/api/access-link", session, { method: "POST" }), {} as never),
+    ];
+    for (const res of responses) expect(res.status).toBe(401);
+  });
+
+  it("is revoked when API_TOKEN rotates", async () => {
+    const session = createSessionValue("agent");
+    expect(verifySessionValue(session)?.m).toBe("agent");
+    process.env.API_TOKEN = "rotated-api-token-0123456789abcdefghijklmn";
+    expect(verifySessionValue(session)).toBeNull();
+    const res = await listsRoute.GET(withCookie("http://localhost/api/lists", session), {} as never);
+    expect(res.status).toBe(401);
+  });
+
+  it("rate-limits failed agent sign-ins like the PIN", async () => {
+    const key = clientKey(new Headers({ "x-forwarded-for": freshIp() }));
+    for (let i = 0; i < 5; i++) {
+      expect(await isRateLimited("agent", key)).toBe(false);
+      await recordFailure("agent", key);
+    }
+    expect(await isRateLimited("agent", key)).toBe(true);
+    expect(await isRateLimited("pin", key)).toBe(false);
+  });
+});
+
 describe("credential separation", () => {
-  it("a web session (from a link) gives no API access", async () => {
+  it("a web session (from a link or the PIN) gives no API access", async () => {
     const session = createSessionValue("link");
     const { token } = createLinkToken();
     for (const headers of <Record<string, string>[]>[
       { cookie: `${SESSION_COOKIE}=${session}` },
+      { cookie: `${SESSION_COOKIE}=${createSessionValue("pin")}` },
       { authorization: `Bearer ${token}` },
       { authorization: `Bearer ${session}` },
     ]) {
