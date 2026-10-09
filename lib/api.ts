@@ -1,6 +1,6 @@
 // Shared plumbing for the bearer-token JSON API (/api/*).
 import { createHash, timingSafeEqual } from "node:crypto";
-import { SESSION_COOKIE, verifySessionValue } from "./auth/session";
+import { canReadApi, SESSION_COOKIE, verifySessionValue } from "./auth/session";
 import { ValidationError } from "./validation";
 
 const NO_STORE = { "Cache-Control": "no-store, max-age=0" };
@@ -41,9 +41,9 @@ function cookieValue(req: Request, name: string): string | undefined {
   return undefined;
 }
 
-/** True for a browser signed in on /agent-login (a session created with the API token). */
-export function hasAgentSession(req: Request): boolean {
-  return verifySessionValue(cookieValue(req, SESSION_COOKIE))?.m === "agent";
+/** True for a browser signed in with the PIN or on /agent-login (see canReadApi). */
+export function hasApiReadSession(req: Request): boolean {
+  return canReadApi(verifySessionValue(cookieValue(req, SESSION_COOKIE)));
 }
 
 /** Parses the request body as JSON, mapping malformed input to a 400. */
@@ -58,15 +58,15 @@ export async function readJson(req: Request): Promise<unknown> {
 
 /**
  * Wraps a route handler with bearer auth, error mapping and no-store caching.
- * Read-only handlers may pass `{ agentSession: true }` to also accept an agent
- * session cookie, so a signed-in agent can open GET URLs directly in a browser.
+ * Read-only handlers may pass `{ sessionRead: true }` to also accept a PIN or agent
+ * session cookie, so a signed-in browser can open GET URLs directly.
  */
 export function apiRoute<Ctx>(
   handler: (req: Request, ctx: Ctx) => Promise<Response>,
-  { agentSession = false }: { agentSession?: boolean } = {},
+  { sessionRead = false }: { sessionRead?: boolean } = {},
 ) {
   return async (req: Request, ctx: Ctx): Promise<Response> => {
-    if (!isApiAuthorized(req) && !(agentSession && hasAgentSession(req))) return unauthorized();
+    if (!isApiAuthorized(req) && !(sessionRead && hasApiReadSession(req))) return unauthorized();
     try {
       return await handler(req, ctx);
     } catch (err) {

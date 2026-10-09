@@ -185,16 +185,22 @@ describe("agent sessions", () => {
   const withCookie = (url: string, session: string, init: RequestInit = {}) =>
     new Request(url, { ...init, headers: { cookie: `other=1; ${SESSION_COOKIE}=${session}` } });
 
-  it("proxy lets visitors without a session reach /agent-login, and sends signed-in ones home", () => {
-    expect(proxy(linkRequest("/agent-login")).headers.get("location")).toBeNull();
-    const signedIn = new NextRequest("http://localhost/agent-login", {
-      headers: { cookie: `${SESSION_COOKIE}=${createSessionValue("agent")}` },
-    });
-    expect(new URL(proxy(signedIn).headers.get("location")!).pathname).toBe("/");
+  const agentLoginWith = (cookie?: string) =>
+    proxy(new NextRequest("http://localhost/agent-login", { headers: cookie ? { cookie } : {} }));
+
+  it("proxy shows /agent-login to signed-out visitors (and stale or link sessions)", () => {
+    expect(agentLoginWith().headers.get("location")).toBeNull();
+    expect(agentLoginWith(`${SESSION_COOKIE}=garbage`).headers.get("location")).toBeNull();
+    expect(agentLoginWith(`${SESSION_COOKIE}=${createSessionValue("link")}`).headers.get("location")).toBeNull();
   });
 
-  it("an agent session can read the GET endpoints in a browser", async () => {
-    const session = createSessionValue("agent");
+  it.each(["agent", "pin"] as const)("proxy sends a %s session from /agent-login to the lists", (method) => {
+    const res = agentLoginWith(`${SESSION_COOKIE}=${createSessionValue(method)}`);
+    expect(new URL(res.headers.get("location")!).pathname).toBe("/");
+  });
+
+  it.each(["agent", "pin"] as const)("a %s session can read the GET endpoints in a browser", async (method) => {
+    const session = createSessionValue(method);
     const list = await createList("agent-read");
     const lists = await listsRoute.GET(withCookie("http://localhost/api/lists", session), {} as never);
     expect(lists.status).toBe(200);
@@ -207,8 +213,8 @@ describe("agent sessions", () => {
     expect(await items.json()).toEqual({ items: [] });
   });
 
-  it("an agent session cannot write through the API", async () => {
-    const session = createSessionValue("agent");
+  it.each(["agent", "pin"] as const)("a %s session cannot write through the API", async (method) => {
+    const session = createSessionValue(method);
     const list = await createList("agent-write");
     const id = "00000000-0000-4000-8000-000000000000";
     const post = (url: string) => withCookie(url, session, { method: "POST", body: JSON.stringify({ name: "x" }) });
@@ -249,12 +255,12 @@ describe("agent sessions", () => {
 });
 
 describe("credential separation", () => {
-  it("a web session (from a link or the PIN) gives no API access", async () => {
+  it("a link session, a link token or a session value as bearer gives no API access", async () => {
     const session = createSessionValue("link");
     const { token } = createLinkToken();
     for (const headers of <Record<string, string>[]>[
       { cookie: `${SESSION_COOKIE}=${session}` },
-      { cookie: `${SESSION_COOKIE}=${createSessionValue("pin")}` },
+      { authorization: `Bearer ${createSessionValue("pin")}` },
       { authorization: `Bearer ${token}` },
       { authorization: `Bearer ${session}` },
     ]) {

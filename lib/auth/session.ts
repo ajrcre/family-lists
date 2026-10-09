@@ -1,6 +1,7 @@
 // Web-UI sessions: a stateless, HMAC-signed cookie. A session never grants write
-// access to the API; only "agent" sessions (signed in with the API token on
-// /agent-login) may also read the API's GET endpoints, see lib/api.ts.
+// access to the API. PIN and agent sessions (agent = signed in with the API token
+// on /agent-login) may also read the API's GET endpoints, see lib/api.ts; access-link
+// sessions may not.
 //
 // Each session records the login method and a fingerprint of the credential it was
 // created with. Rotating that credential (PIN_HASH, ACCESS_LINK_SECRET or API_TOKEN)
@@ -61,6 +62,11 @@ export function verifySessionValue(value: string | undefined, now = Date.now()):
   const v = credentialFingerprint(payload.m);
   if (!v || payload.v !== v) return null;
   return payload;
+}
+
+/** Whether a session may use the API's read-only GET endpoints from a browser. */
+export function canReadApi(session: SessionPayload | null): boolean {
+  return session?.m === "pin" || session?.m === "agent";
 }
 
 export function sessionCookieOptions() {

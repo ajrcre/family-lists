@@ -253,7 +253,11 @@ test("agent signs in with the API token and can read the API in the browser", as
   // Without a session the API refuses a browser GET.
   expect((await page.request.get("/api/lists")).status()).toBe(401);
 
+  // Signed out, /agent-login shows the token form (no redirect to the PIN screen).
   await page.goto("/agent-login");
+  await expect(page).toHaveURL(/\/agent-login$/);
+  await expect(page.getByLabel("API token")).toHaveAttribute("type", "password");
+  await expect(page.getByLabel("קוד כניסה")).toHaveCount(0);
   await page.getByLabel("API token").fill("not-the-token");
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page.getByText("Invalid token")).toBeVisible();
@@ -276,4 +280,15 @@ test("agent signs in with the API token and can read the API in the browser", as
 
   // The session is read-only for the API: writes still need the bearer token.
   expect((await page.request.post("/api/lists", { data: { name: "x" } })).status()).toBe(401);
+});
+
+test("a PIN session can also read the API's GET endpoints in the browser", async ({ page }) => {
+  await login(page);
+  const res = await page.goto("/api/lists");
+  expect(res!.status()).toBe(200);
+  expect(Array.isArray((await res!.json()).lists)).toBe(true);
+  expect((await page.request.post("/api/lists", { data: { name: "x" } })).status()).toBe(401);
+  // Already signed in: /agent-login goes straight to the lists.
+  await page.goto("/agent-login");
+  await expect(page).not.toHaveURL(/agent-login/);
 });

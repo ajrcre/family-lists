@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 export const GET = apiRoute(async () => {
   return json({ lists: await listLists() });
-}, { agentSession: true });
+}, { sessionRead: true });
 
 export const POST = apiRoute(async (req) => {
   const { name } = parseListInput(await readJson(req));

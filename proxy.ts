@@ -5,7 +5,7 @@
 //  - No valid session: redirect to the PIN screen (the sign-in pages stay reachable).
 import { NextResponse, type NextRequest } from "next/server";
 import { LINK_PARAM } from "@/lib/auth/link";
-import { SESSION_COOKIE, verifySessionValue } from "@/lib/auth/session";
+import { canReadApi, SESSION_COOKIE, verifySessionValue } from "@/lib/auth/session";
 
 export function proxy(req: NextRequest) {
   const { pathname, searchParams } = req.nextUrl;
@@ -21,8 +21,14 @@ export function proxy(req: NextRequest) {
 
   if (pathname.startsWith("/auth/")) return NextResponse.next();
 
-  const authed = verifySessionValue(req.cookies.get(SESSION_COOKIE)?.value) !== null;
-  if (pathname === "/login" || pathname === "/agent-login") {
+  const session = verifySessionValue(req.cookies.get(SESSION_COOKIE)?.value);
+  const authed = session !== null;
+  // The token form shows unless the browser can already read the API; a link
+  // session (which cannot) may sign in again here with the token.
+  if (pathname === "/agent-login") {
+    return canReadApi(session) ? NextResponse.redirect(new URL("/", req.url)) : NextResponse.next();
+  }
+  if (pathname === "/login") {
     return authed ? NextResponse.redirect(new URL("/", req.url)) : NextResponse.next();
   }
   if (!authed) return NextResponse.redirect(new URL("/login", req.url));
